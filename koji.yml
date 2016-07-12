@@ -1,0 +1,147 @@
+---
+- hosts: '{{host}}'
+  user: kharitonov
+  sudo: yes
+  vars:
+     kojihostname: {{ansible_hostname}}
+     kojipass: fedorakojipass
+  tasks:
+#Certificate
+  - package:  name=openssl state=present
+  - package:  name=koji state=present
+  - file: path=/etc/pki/koji state=directory
+  - template: src=templates/ssl.cnf.j2 dest=/etc/pki/koji/ssl.cnf owner=root group=root
+  - hostname: name={{ kojihostname }}
+  - name: add line to hosts
+    lineinfile: dest=/etc/hosts line="{{ansible_default_ipv4.address}} {{ kojihostname }}" state=present insertafter=EOF
+  - file: path=/etc/pki/koji/certs state=directory
+  - file: path=/etc/pki/koji/private state=directory
+  - file: path=/etc/pki/koji/confs state=directory
+  - file: path=/etc/pki/koji/index.txt state=touch
+  - lineinfile: dest=/etc/pki/koji/serial line="01" state=present insertafter=EOF create=yes
+  - shell: openssl genrsa -out private/koji_ca_cert.key 2048 chdir=/etc/pki/koji/ 
+  - shell: openssl req -config ssl.cnf -new -x509 -subj "/C=RU/ST=Moscow/L=Moscow/O=RF/OU={{ kojihostname }}/CN={{ kojihostname }}" -days 3650 -key private/koji_ca_cert.key -out koji_ca_cert.crt -extensions v3_ca chdir=/etc/pki/koji/
+  - shell: openssl genrsa -out private/{{ item }}.key 2048 && cat ssl.cnf | sed 's/$HOSTNAME/'{{ item }}'/'> ssl2.cnf && openssl req -config ssl2.cnf -new -nodes -out certs/{{ item }}.csr -subj "/C=RU/ST=Moscow/L=Moscow/O=RF/OU={{ item }}/CN={{ item }}" -key private/{{ item }}.key && openssl ca -batch -config ssl2.cnf -keyfile private/koji_ca_cert.key -cert koji_ca_cert.crt -out certs/{{ item }}.crt -outdir certs -infiles certs/{{ item }}.csr && cat certs/{{ item }}.crt private/{{ item }}.key > {{ item }}.pem && mv ssl2.cnf confs/{{ item }}-ssl.cnf chdir=/etc/pki/koji/ executable=/bin/bash
+    with_items:
+       - "kojiadmin"
+       - "kojid"
+       - "kojira"
+  - shell: openssl genrsa -out private/{{ item }}.key 2048 && cat ssl.cnf | sed 's/$HOSTNAME/'{{ item }}'/'> ssl2.cnf && openssl req -config ssl2.cnf -new -nodes -out certs/{{ item }}.csr -subj "/C=RU/ST=Moscow/L=Moscow/O=RF/OU={{ item }}/CN={{ kojihostname }}" -key private/{{ item }}.key && openssl ca -batch -config ssl2.cnf -keyfile private/koji_ca_cert.key -cert koji_ca_cert.crt -out certs/{{ item }}.crt -outdir certs -infiles certs/{{ item }}.csr && cat certs/{{ item }}.crt private/{{ item }}.key > {{ item }}.pem && mv ssl2.cnf confs/{{ item }}-ssl.cnf chdir=/etc/pki/koji/ executable=/bin/bash
+    with_items:
+       - "kojihub"
+       - "kojiweb"
+  - shell: cp /etc/pki/koji/koji_ca_cert.crt /etc/pki/tls/certs/localhost.crt
+  - shell: cp /etc/pki/koji/private/koji_ca_cert.key /etc/pki/tls/private/localhost.key
+#Users
+  - user: name={{ item }} shell=/bin/bash
+    with_items:
+       - "kojiadmin"
+       - "koji"
+  - file: path=/home/kojiadmin/.koji state=directory owner=kojiadmin group=kojiadmin
+  - shell: cp /etc/pki/koji/kojiadmin.pem ~/.koji/client.crt
+    become: yes
+    become_user: kojiadmin
+  - shell: cp /etc/pki/koji/koji_ca_cert.crt ~/.koji/clientca.crt
+    become: yes
+    become_user: kojiadmin
+  - shell: cp /etc/pki/koji/koji_ca_cert.crt ~/.koji/serverca.crt
+    become: yes
+    become_user: kojiadmin
+  - file: src=/etc/koji.conf dest=/home/kojiadmin/.koji/config state=link owner=kojiadmin group=kojiadmin
+#Database
+  - package:  name=postgresql-server state=present
+  - shell: su - postgres -c "PGDATA=/var/lib/pgsql/data initdb"
+    ignore_errors: True
+  - service: name=postgresql state=started enabled=yes
+  - shell: createuser --no-superuser --no-createrole --no-createdb koji && createdb -O koji koji && psql -c "alter user koji with encrypted password '{{ kojipass }}';"
+    become: yes
+    become_user: postgres
+    ignore_errors: True
+  - shell: psql koji koji < /usr/share/doc/koji*/docs/schema.sql executable=/bin/bash
+    become: yes
+    become_user: koji
+    ignore_errors: True
+  - lineinfile: dest=/var/lib/pgsql/data/pg_hba.conf line="host    koji        koji    127.0.0.1/32      trust \nhost    koji        koji     ::1/128          trust" insertafter="^# TYPE" state=present
+  - service: name=postgresql state=reloaded
+  - shell: psql -c "insert into users (name, status, usertype) values ('kojiadmin', 0, 0);" && psql -c "insert into user_perms (user_id, perm_id, creator_id) values (1, 1, 1);"
+    become: yes
+    become_user: koji
+    ignore_errors: True
+  - lineinfile: dest=/var/lib/pgsql/data/postgresql.conf regexp='^#listen_addresses' line="listen_addresses = '*'"
+  - service: name=postgresql state=restarted
+#KojiHub
+  - package:  name=koji-hub state=present
+  - package:  name=httpd state=present
+  - package:  name=mod_ssl state=present
+  - package:  name=python-simplejson state=present
+  - lineinfile: dest=/etc/httpd/conf.d/ssl.conf line="SSLCertificateFile /etc/pki/koji/certs/kojihub.crt\nSSLCertificateKeyFile /etc/pki/koji/private/kojihub.key\nSSLCertificateChainFile /etc/pki/koji/koji_ca_cert.crt\nSSLCACertificateFile /etc/pki/koji/koji_ca_cert.crt\nSSLVerifyClient require\nSSLVerifyDepth  10" insertafter="^Listen" state=present
+  - lineinfile: dest=/etc/koji-hub/hub.conf regexp='^DBPass' line="DBPass = {{ kojipass }}"
+  - lineinfile: dest=/etc/koji-hub/hub.conf regexp='^DBHost' line="DBHost = 127.0.0.1"
+  - lineinfile: dest=/etc/koji-hub/hub.conf regexp='^KojiWebURL' line="KojiWebURL = http://{{ kojihostname }}/koji"
+  - lineinfile: dest=/etc/koji-hub/hub.conf regexp='^#ProxyDNs' line="CN={{ kojihostname }},OU=kojiweb,O=RF,ST=Moscow,C=RU"
+  - file: path=/mnt/koji state=directory owner=apache group=apache
+  - file: path=/mnt/koji/packages state=directory owner=apache group=apache
+  - file: path=/mnt/koji/repos state=directory owner=apache group=apache
+  - file: path=/mnt/koji/work state=directory owner=apache group=apache
+  - file: path=/mnt/koji/scratch state=directory owner=apache group=apache
+  - file: path=/mnt/koji/repos/signed state=directory owner=apache group=apache
+  - lineinfile: dest=/etc/httpd/conf.d/kojihub.conf line="<Location /kojihub/ssllogin>" insertafter=EOF
+  - lineinfile: dest=/etc/httpd/conf.d/kojihub.conf line="         SSLOptions +StdEnvVars" insertafter=EOF
+  - lineinfile: dest=/etc/httpd/conf.d/kojihub.conf line="</Location>" insertafter=EOF
+  - service: name=httpd state=restarted enabled=yes
+  - lineinfile: dest=/etc/koji.conf regexp='^server' line="server = http://{{ kojihostname }}/kojihub"
+  - lineinfile: dest=/etc/koji.conf regexp='^weburl' line="weburl = http://{{ kojihostname }}/koji"
+  - lineinfile: dest=/etc/koji.conf regexp='^topurl' line="topurl = http://{{ kojihostname }}/kojifiles"
+  - lineinfile: dest=/etc/koji.conf regexp='^;topdir' line="topdir = /mnt/koji"
+  - lineinfile: dest=/etc/koji.conf regexp='^cert' line="cert = ~/.koji/client.crt"
+  - lineinfile: dest=/etc/koji.conf line="ca = ~/.koji/clientca.crt" insertafter=EOF
+  - lineinfile: dest=/etc/koji.conf regexp='^serverca' line="serverca = ~/.koji/serverca.crt"
+#KojiWeb
+  - package:  name=koji-web state=present
+  - lineinfile: dest=/etc/kojiweb/web.conf regexp='^KojiHubURL' line="KojiHubURL = http://{{ kojihostname }}/kojihub"
+  - lineinfile: dest=/etc/kojiweb/web.conf regexp='^KojiFilesURL' line="KojiFilesURL = http://{{ kojihostname }}/kojifiles"
+  - lineinfile: dest=/etc/kojiweb/web.conf regexp='^# WebCert' line="WebCert = /etc/pki/koji/kojiweb.pem"
+  - lineinfile: dest=/etc/kojiweb/web.conf regexp='^# KojiHubCA' line="KojiHubCA = /etc/pki/koji/koji_ca_cert.crt"
+  - lineinfile: dest=/etc/kojiweb/web.conf regexp='^# Secret' line="Secret = {{ kojipass }}"
+  - lineinfile: dest=/etc/httpd/conf.d/kojiweb.conf line="<Location /koji/login>" insertafter=EOF
+  - lineinfile: dest=/etc/httpd/conf.d/kojiweb.conf line="     SSLOptions +StdEnvVars" insertafter=EOF
+  - lineinfile: dest=/etc/httpd/conf.d/kojiweb.conf line="</Location>" insertafter=EOF
+  - package:  name=git state=present
+  - git: repo=http://fedorapeople.org/cgit/ausil/public_git/koji-theme-fedora.git dest=/usr/local/src/koji-theme-fedora
+  - file: path=/usr/share/koji-themes state=directory
+  - file: path=/usr/share/koji-themes/fedora-koji state=directory
+  - shell: cp -r /usr/local/src/koji-theme-fedora/www/static/* /usr/share/koji-themes/fedora-koji
+  - shell: cp /usr/local/src/koji-theme-fedora/www/httpd.conf /etc/httpd/conf.d/kojitheme.conf
+  - service: name=httpd state=restarted
+#KojiBuilder
+  - package:  name=koji-builder state=present
+  - shell: koji add-host kojid i386 x86_64
+    become: yes
+    become_user: kojiadmin
+  - lineinfile: dest=/etc/kojid/kojid.conf regexp='^server' line="server = http://{{ kojihostname }}/kojihub"
+  - lineinfile: dest=/etc/kojid/kojid.conf regexp='^topurl' line="topurl = http://{{ kojihostname }}/kojifiles"
+  - lineinfile: dest=/etc/kojid/kojid.conf regexp='^; topdir' line="topdir = /mnt/koji"
+  - lineinfile: dest=/etc/kojid/kojid.conf regexp='^; workdir' line="topdir = /mnt/koji"
+  - lineinfile: dest=/etc/kojid/kojid.conf line="cert = /etc/pki/koji/kojid.pem" insertafter=EOF
+  - lineinfile: dest=/etc/kojid/kojid.conf line="ca = /etc/pki/koji/koji_ca_cert.crt" insertafter=EOF
+  - lineinfile: dest=/etc/kojid/kojid.conf line="serverca = /etc/pki/koji/koji_ca_cert.crt" insertafter=EOF
+  - shell: koji add-host-to-channel kojid createrepo
+    become: yes
+    become_user: kojiadmin
+  - shell: koji edit-host --capacity=16 kojid
+    become: yes
+    become_user: kojiadmin
+  - service: name=kojid state=started enabled=yes
+#Kojira
+  - package:  name=koji-utils state=present
+  - shell: koji add-user kojira
+    become: yes
+    become_user: kojiadmin
+  - shell: koji grant-permission repo kojira
+    become: yes
+    become_user: kojiadmin
+  - lineinfile: dest=/etc/kojira/kojira.conf regexp='^server' line="server = http://{{ kojihostname }}/kojihub"
+  - lineinfile: dest=/etc/kojira/kojira.conf line="cert = /etc/pki/koji/kojid.pem" insertafter=EOF
+  - lineinfile: dest=/etc/kojira/kojira.conf line="ca = /etc/pki/koji/koji_ca_cert.crt" insertafter=EOF
+  - lineinfile: dest=/etc/kojira/kojira.conf line="serverca = /etc/pki/koji/koji_ca_cert.crt" insertafter=EOF
+  - service: name=kojira state=started enabled=yes
