@@ -1,5 +1,5 @@
 ---
-#  - include: roles/koji/tasks/koji-hub-web.yml
+  - include: roles/koji/tasks/koji-hub-web.yml
   - include: roles/koji/tasks/koji-builder-add.yml
-#  - include: roles/koji/tasks/koji-builder-deploy.yml
-#  - include: roles/koji/tasks/koji-kojira.yml
+  - include: roles/koji/tasks/koji-builder-deploy.yml
+  - include: roles/koji/tasks/koji-kojira.yml
