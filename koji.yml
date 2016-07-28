@@ -1,9 +1,7 @@
 ---
 - hosts: '{{host}}'
-  user: kharitonov
-  sudo: yes
   vars:
-     kojihostname: koji.efdev.pw
+     kojihostname: koji.example.com
      kojipass: kojipassword
      builder: kojid
   roles:
