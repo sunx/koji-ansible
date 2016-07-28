@@ -1,0 +1,10 @@
+---
+  - package:  name=koji-builder state=present
+  - lineinfile: dest=/etc/kojid/kojid.conf regexp='^server' line="server = http://{{ kojihostname }}/kojihub"
+  - lineinfile: dest=/etc/kojid/kojid.conf regexp='^topurl' line="topurl = http://{{ kojihostname }}/kojifiles"
+  - lineinfile: dest=/etc/kojid/kojid.conf regexp='^; topdir' line="topdir = /mnt/koji"
+  - lineinfile: dest=/etc/kojid/kojid.conf regexp='^; workdir' line="topdir = /mnt/koji"
+  - lineinfile: dest=/etc/kojid/kojid.conf line="cert = /etc/pki/koji/kojid.pem" insertafter=EOF
+  - lineinfile: dest=/etc/kojid/kojid.conf line="ca = /etc/pki/koji/koji_ca_cert.crt" insertafter=EOF
+  - lineinfile: dest=/etc/kojid/kojid.conf line="serverca = /etc/pki/koji/koji_ca_cert.crt" insertafter=EOF
+  - service: name=kojid state=started enabled=yes

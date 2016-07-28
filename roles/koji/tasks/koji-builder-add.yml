@@ -1,0 +1,10 @@
+---
+  - shell: koji add-host {{builder}} i386 x86_64
+    become: yes
+    become_user: kojiadmin
+  - shell: koji add-host-to-channel {{builder}} createrepo
+    become: yes
+    become_user: kojiadmin
+  - shell: koji edit-host --capacity=16 {{builder}}
+    become: yes
+    become_user: kojiadmin

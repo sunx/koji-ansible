@@ -1,0 +1,13 @@
+---
+  - package:  name=koji-utils state=present
+  - shell: koji add-user kojira
+    become: yes
+    become_user: kojiadmin
+  - shell: koji grant-permission repo kojira
+    become: yes
+    become_user: kojiadmin
+  - lineinfile: dest=/etc/kojira/kojira.conf regexp='^server' line="server = http://{{ kojihostname }}/kojihub"
+  - lineinfile: dest=/etc/kojira/kojira.conf line="cert = /etc/pki/koji/kojid.pem" insertafter=EOF
+  - lineinfile: dest=/etc/kojira/kojira.conf line="ca = /etc/pki/koji/koji_ca_cert.crt" insertafter=EOF
+  - lineinfile: dest=/etc/kojira/kojira.conf line="serverca = /etc/pki/koji/koji_ca_cert.crt" insertafter=EOF
+  - service: name=kojira state=started enabled=yes

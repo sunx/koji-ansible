@@ -1,7 +1,5 @@
 HOME                    = .
 RANDFILE                = .rand
-HOME                    = .
-RANDFILE                = .rand
 
 [ca]
 default_ca              = ca_default
@@ -64,3 +62,13 @@ challengePassword_min           = 4
 challengePassword_max           = 20
 unstructuredName                = An optional company name
 
+[usr_cert]
+basicConstraints                = CA:FALSE
+nsComment                       = "OpenSSL Generated Certificate"
+subjectKeyIdentifier            = hash
+authorityKeyIdentifier          = keyid,issuer:always
+
+[v3_ca]
+subjectKeyIdentifier            = hash
+authorityKeyIdentifier          = keyid:always,issuer:always
+basicConstraints                = CA:true
